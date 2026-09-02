@@ -1,0 +1,15 @@
+# Runtime and test dependencies, pinned for reproducible installs.
+pytest==9.0.3
+requests==2.33.1
+fastapi>=0.120.4,<0.136.0
+starlette==1.3.1
+# Test dependency for `starlette.testclient`. Starlette 1.3.x still accepts
+# the older `httpx` package with a deprecation warning; `httpx2` is the
+# supported dependency and keeps the test environment reproducible.
+httpx2==2.9.1
+uvicorn==0.34.2
+websockets==15.0.1
+# Ed25519 request signing for Consciousness Server requests.
+cryptography==50.0.0
+# Optional extras — uncomment or install via `pip install -r requirements-extras.txt`
+# anthropic==0.40.0    # Anthropic Claude API fallback (set ANTHROPIC_API_KEY)

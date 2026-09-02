@@ -1,0 +1,48 @@
+{
+  "_comment_": [
+    "Example custom policy file for Cortex. Point POLICY_FILE at this",
+    "(or a copy) to override the built-in DEFAULT_POLICIES in policy.py.",
+    "Run with: POLICY_FILE=/path/to/policy.json ./run.sh agent",
+    "",
+    "Shape per tool: { 'deny': [...regex...], 'ask': [...regex...], 'allow': [...regex...] }.",
+    "Patterns are Python regular expressions matched against the literal",
+    "string the model passed as the tool's argv / cmd. DENY wins over ASK",
+    "wins over ALLOW.",
+    "",
+    "Shared-list keys (_CREDENTIAL_DENY, _PERSISTENCE_DENY, _HISTORY_DENY,",
+    "_SYSTEM_DIRS_DENY) are re-expanded across every tool that consumes",
+    "them — add an entry once and every tool that reads files gets it."
+  ],
+
+  "_CREDENTIAL_DENY": [
+    "~/\\.vault/",
+    "/etc/keys/"
+  ],
+
+  "bash": {
+    "deny": [
+      "^aws\\s+s3\\s+rm",
+      "^kubectl\\s+delete"
+    ],
+    "ask": [
+      "^docker\\s+(rm|rmi|system\\s+prune)"
+    ],
+    "allow": [
+      "^aws\\s+s3\\s+ls",
+      "^kubectl\\s+(get|describe|logs)"
+    ]
+  },
+
+  "write_file": {
+    "deny": [
+      "^/etc/",
+      "^/boot/"
+    ]
+  },
+
+  "read_file": {
+    "ask": [
+      "/secrets/"
+    ]
+  }
+}

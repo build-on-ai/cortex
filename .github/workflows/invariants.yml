@@ -1,0 +1,69 @@
+name: security invariants
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: invariants-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  invariants:
+    name: structural invariants (AST + runtime sentinel)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+      fail-fast: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run structural invariant tests (STRICT)
+        run: python3 tests/test_invariants.py
+
+      - name: Run policy regression tests
+        run: python3 tests/test_policy.py
+
+      - name: Run worker-mode regression tests
+        run: python3 tests/test_worker.py
+
+      - name: Run CS auto-discovery tests
+        run: python3 tests/test_auto_discover.py
+
+      - name: Run compactor prompt-contract tests
+        run: python3 tests/test_compactor.py
+
+      - name: Verify UNSAFE.md is up to date
+        run: |
+          git diff --exit-code UNSAFE.md || {
+            echo "::error::UNSAFE.md is stale. Run tests locally and commit the regenerated file."
+            exit 1
+          }
+
+  dependencies:
+    name: dependency CVE scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit requirements.txt
+        run: pip-audit -r requirements.txt --strict

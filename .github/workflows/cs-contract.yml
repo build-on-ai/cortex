@@ -1,0 +1,68 @@
+name: cs contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *"
+
+concurrency:
+  group: cs-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Clone consciousness-server
+        run: git clone --depth=1 https://github.com/build-on-ai/consciousness-server.git /tmp/cs
+
+      - name: Mint signing keys
+        working-directory: /tmp/cs
+        run: |
+          bin/bootstrap-keys
+          ssh-keygen -t ed25519 -C cortex-ci -f deploy/keys/cortex -N "" -q
+          cp deploy/keys/cortex.pub key-server/keys/agents/cortex.pub
+
+      - name: Start CS stack
+        working-directory: /tmp/cs/deploy
+        run: docker compose up -d
+
+      - name: Resolve CS port
+        run: echo "CS_PORT=$(/tmp/cs/lib/ports.py consciousness-server)" >> "$GITHUB_ENV"
+
+      - name: Wait for CS /health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf "http://127.0.0.1:${CS_PORT}/health" > /dev/null; then
+              echo "CS healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::CS did not become healthy in 60s on port ${CS_PORT}"
+          docker compose -f /tmp/cs/deploy/docker-compose.yml logs
+          exit 1
+
+      - name: Run cortex↔CS contract test
+        env:
+          CS_URL: http://127.0.0.1:${{ env.CS_PORT }}
+          CS_SIGNING_KEY: /tmp/cs/deploy/keys/cortex
+          CS_AGENT_ID: cortex
+        run: python3 tests/test_cs_contract.py
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f /tmp/cs/deploy/docker-compose.yml down -v
