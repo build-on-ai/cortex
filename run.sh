@@ -35,9 +35,16 @@ if [ -f "$DIR/.env" ]; then
 fi
 
 # Venv — install from requirements.txt (pinned versions, hash-friendly)
-if [ ! -d "$DIR/venv" ]; then
+# Test the activate script, not the directory: a venv that failed to build
+# leaves the directory behind, and every later run then sources a file that
+# does not exist.
+if [ ! -f "$DIR/venv/bin/activate" ]; then
     echo "Creating venv..."
-    python3 -m venv "$DIR/venv"
+    if ! python3 -m venv "$DIR/venv"; then
+        echo "python3 -m venv failed. On Debian/Ubuntu install the venv module:" >&2
+        echo "  sudo apt install python3-venv" >&2
+        exit 1
+    fi
     # shellcheck disable=SC1091
     source "$DIR/venv/bin/activate"
     pip install -q --upgrade pip

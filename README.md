@@ -24,6 +24,7 @@ Like Claude Code or Cursor — but running entirely on your machine, with your o
 
 **Prerequisites:** Python 3.12+, `curl`, and Ollama (installed in step 1).
 `run.sh` creates a venv on first run, so no system-wide pip install is needed.
+Debian and Ubuntu ship `venv` separately: `sudo apt install python3-venv`.
 
 ```bash
 # 1. Install Ollama (https://ollama.com)
