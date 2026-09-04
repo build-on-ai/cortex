@@ -464,7 +464,7 @@ def test_auth_fail_rate_limit():
     os.environ["WEB_TOKEN"] = "test-for-rate-limit"
     web = importlib.import_module("web")
     # Clear any prior state.
-    # The counter lives in security/auth.py; web.py calls that one, not its own.
+    # The counter lives in security/auth.py.
     from security import auth as _auth_mod
     with _auth_mod._auth_fail_lock:
         _auth_mod._auth_fail_log.clear()
@@ -476,8 +476,8 @@ def test_auth_fail_rate_limit():
     assert not over, "rate limit tripped too early"
     final = _auth_mod.note_auth_fail(ip)
     assert final, "rate limit did not trip at the boundary"
-    # web.py must call the same counter object. A second one would give the
-    # same address its own budget on every auth path.
+    # One counter object for every auth path: the budget belongs to the
+    # address, not to the module that noticed the failure.
     assert web._note_auth_fail is _auth_mod.note_auth_fail, \
         "web.py uses its own auth-failure counter instead of the shared one"
 

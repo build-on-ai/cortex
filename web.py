@@ -146,10 +146,8 @@ AUTH_COOKIE_NAME = "cortex_session"
 # and harvest the Secure cookie. Enable only behind a trusted proxy.
 TRUST_PROXY_HEADERS = os.getenv("CORTEX_TRUST_PROXY_HEADERS") == "1"
 
-# Rate-limit bucketing and client-IP resolution live in security/auth.py. They
-# used to live here as well, in a second copy with its own dict and lock — so a
-# caller failing auth at the bootstrap path and at any API endpoint filled two
-# separate buckets and got twice the attempts one address is supposed to have.
+# Rate-limit bucketing and client-IP resolution live in security/auth.py, so
+# every auth path counts against one budget per address.
 
 def _is_request_https(request) -> bool:
     """Decide cookie Secure flag. Honours X-Forwarded-Proto only when the

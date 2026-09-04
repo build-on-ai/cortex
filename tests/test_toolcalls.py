@@ -36,8 +36,8 @@ check(parse_tool_arguments("not json") == {}, "garbage yields {} rather than rai
 check(parse_tool_arguments(None) == {}, "None yields {}")
 check(parse_tool_arguments(b"") == {}, "bytes yield {}")
 
-# Valid JSON that is not an object. The old code handed the string or list on,
-# reaching policy.check and then args.get() — an AttributeError in the loop.
+# Valid JSON that is not an object. policy.check and args.get() need a dict, so
+# anything else has to come back empty rather than be passed on.
 check(parse_tool_arguments('"text"') == {}, "a bare JSON string is not an argument list")
 check(parse_tool_arguments("[1, 2]") == {}, "a JSON array is not an argument list")
 check(parse_tool_arguments("42") == {}, "a JSON number is not an argument list")
