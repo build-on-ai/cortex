@@ -146,86 +146,10 @@ AUTH_COOKIE_NAME = "cortex_session"
 # and harvest the Secure cookie. Enable only behind a trusted proxy.
 TRUST_PROXY_HEADERS = os.getenv("CORTEX_TRUST_PROXY_HEADERS") == "1"
 
-# For the user who overrides the generated token with a weak one; the generated
-# token needs no such protection. Per-IP sliding window, no extra dependency.
-_AUTH_FAIL_WINDOW_SEC = 60
-_AUTH_FAIL_LIMIT = 10
-_AUTH_FAIL_GC_THRESHOLD = 256  # lowered from 1024 so IPv6 /64 spray is GC'd sooner
-_auth_fail_log: dict[str, list[float]] = {}
-_auth_fail_lock = threading.Lock()
-
-def _rate_limit_key(ip: str) -> str:
-    """Normalise an IP into the key used for rate-limit bucketing.
-
-    IPv6 `/128` keying is useless in the wild — consumer ISPs hand
-    out `/64` and a Linux client can `ip -6 route add local <prefix>::/64
-    dev lo` to spray from 2^64 addresses. Bucket IPv6 by `/64` so the
-    limit is meaningful; keep IPv4 at `/32`.
-    """
-    if not ip:
-        return ""
-    # ip_address() rejects the zone form, and keeping the zone would give a fresh
-    # rate-limit bucket for every rotated value.
-    if "%" in ip:
-        ip = ip.split("%", 1)[0]
-    if ":" in ip:
-        # IPv6 collapses to /64; the IPv4-mapped form falls through and buckets as IPv4.
-        try:
-            import ipaddress as _ipa
-            addr = _ipa.ip_address(ip)
-            if isinstance(addr, _ipa.IPv6Address):
-                if addr.ipv4_mapped:
-                    return f"v4:{addr.ipv4_mapped}"
-                net = _ipa.ip_network(f"{ip}/64", strict=False)
-                return f"v6/64:{net.network_address}"
-        except ValueError:
-            pass
-    return f"v4:{ip}"
-
-
-def _note_auth_fail(ip: str) -> bool:
-    """Record an auth failure for *ip*. Returns True if the caller is now
-    over the limit (caller should return 429 / close with 4429)."""
-    key = _rate_limit_key(ip)
-    if not key:
-        return False
-    import time as _time
-    now = _time.monotonic()
-    cutoff = now - _AUTH_FAIL_WINDOW_SEC
-    with _auth_fail_lock:
-        bucket = _auth_fail_log.setdefault(key, [])
-        # Bucket depth is capped, so a sustained spray cannot grow one without bound.
-        bucket[:] = [t for t in bucket if t > cutoff][-_AUTH_FAIL_LIMIT:]
-        bucket.append(now)
-        # Idle buckets are collected, or an IPv6 /64 rotation grows the dict without bound.
-        if len(_auth_fail_log) > _AUTH_FAIL_GC_THRESHOLD:
-            for k in [k for k, v in _auth_fail_log.items() if not v or v[-1] < cutoff]:
-                _auth_fail_log.pop(k, None)
-        return len(bucket) >= _AUTH_FAIL_LIMIT
-
-
-def _client_ip(request_or_ws) -> str:
-    """The client IP for rate-limit keying.
-
-    Prefers headers the proxy overwrites — X-Real-IP, CF-Connecting-IP — because
-    proxies append to X-Forwarded-For, leaving its leftmost value caller-set.
-    Operators who only have XFF should configure their proxy to emit X-Real-IP.
-    """
-    try:
-        if TRUST_PROXY_HEADERS and hasattr(request_or_ws, "headers"):
-            # Single-value headers, trusted only when proxy-header trust is on.
-            # True-Client-IP is included: without it that traffic buckets by edge address.
-            for _h in ("true-client-ip", "cf-connecting-ip", "x-real-ip"):
-                v = request_or_ws.headers.get(_h, "").strip()
-                if v:
-                    return v
-        client = getattr(request_or_ws, "client", None)
-        if client and client.host:
-            return client.host
-    except Exception:
-        pass
-    return ""
-
+# Rate-limit bucketing and client-IP resolution live in security/auth.py. They
+# used to live here as well, in a second copy with its own dict and lock — so a
+# caller failing auth at the bootstrap path and at any API endpoint filled two
+# separate buckets and got twice the attempts one address is supposed to have.
 
 def _is_request_https(request) -> bool:
     """Decide cookie Secure flag. Honours X-Forwarded-Proto only when the
@@ -242,6 +166,8 @@ from security import (
     build_require_auth as _build_require_auth,
     public_endpoint as _public_endpoint,
     ClientIdentity as _ClientIdentity,
+    note_auth_fail as _note_auth_fail,
+    parse_tool_arguments,
 )
 _session_manager = _get_session_manager()
 _require_auth_dep = _build_require_auth(
@@ -1559,7 +1485,7 @@ async def root(request: Request,
         return HTMLResponse(HTML)
     # guard the bootstrap path before validating so an attacker
     # who pounds /?token=<guess> can't probe at wire speed.
-    ip = _client_ip(request)
+    ip = _ClientIdentity.from_request(request, trust_proxy=TRUST_PROXY_HEADERS).ip
     # First load carries ?token= from the terminal link; it is exchanged for a
     # session cookie and redirected to a clean "/".
     if token and _check_auth(token):
@@ -1618,7 +1544,8 @@ async def ws_endpoint(ws: WebSocket,
     if not authed:
         # The same bucket as the HTTP bootstrap; 4429 lets the client tell a rate limit
         # from an auth failure.
-        over = _note_auth_fail(_client_ip(ws))
+        over = _note_auth_fail(
+            _ClientIdentity.from_request(ws, trust_proxy=TRUST_PROXY_HEADERS).ip)
         await ws.close(code=4429 if over else 4401)
         return
     # Cap concurrent sessions — see MAX_WS_CONNECTIONS comment above.
@@ -1893,20 +1820,11 @@ async def ws_endpoint(ws: WebSocket,
                 for i, tc in enumerate(tool_calls):
                     fn   = tc.get("function", {})
                     name = fn.get("name", "")
-                    raw_args = fn.get("arguments", {})
-                    if isinstance(raw_args, dict):
-                        args = raw_args
-                    else:
-                        try:
-                            args = json.loads(raw_args)
-                        except (json.JSONDecodeError, TypeError):
-                            args = {}
-
                     tc_id = f"{session_id}_{loop_count}_{i}"
-                    arg_preview = args.get("command") or args.get("path") or args.get("content","")[:40] or ""
 
-                    # Rejected before the policy check: the model can emit anything into
-                    # function.name.
+                    # Name first, as in agent.py and worker.py: a rejected name
+                    # discards the whole call, so its arguments are never needed.
+                    # The model can emit anything into function.name.
                     if not _valid_tool_name(name):
                         await ws.send_json({
                             "type": "tool_call",
@@ -1919,6 +1837,10 @@ async def ws_endpoint(ws: WebSocket,
                             source="invalid_name",
                         ))
                         continue
+
+                    args = parse_tool_arguments(fn.get("arguments", {}))
+                    arg_preview = (args.get("command") or args.get("path")
+                                   or str(args.get("content", ""))[:40] or "")
 
                     # Policy check
                     decision, reason = _policy.check(name, args)

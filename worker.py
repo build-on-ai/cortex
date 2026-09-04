@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 # Import agent modules
 sys.path.insert(0, str(Path(__file__).parent))
+from security import parse_tool_arguments
 from agent import (
     execute_tool, call_model, call_anthropic, build_system_prompt,
     wrap_tool_output, make_tool_result, _valid_tool_name,
@@ -252,14 +253,7 @@ def execute_task(task: dict, policy: PolicyEngine, recovery: RecoveryEngine) -> 
                         source="invalid_name",
                     ))
                     continue
-                raw_args = fn.get("arguments", {})
-                if isinstance(raw_args, dict):
-                    args = raw_args
-                else:
-                    try:
-                        args = json.loads(raw_args)
-                    except (json.JSONDecodeError, TypeError):
-                        args = {}
+                args = parse_tool_arguments(fn.get("arguments", {}))
 
                 # Policy check
                 decision, reason = policy.check(name, args)

@@ -277,11 +277,9 @@ class C:
 PLUGINS = {}  # name -> plugin module
 
 # Model-emitted names reach policy checks, argv and XML attributes; one
-# definition here, imported by web.py.
-_TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
-
-def _valid_tool_name(name) -> bool:
-    return isinstance(name, str) and bool(_TOOL_NAME_RE.match(name))
+# definition here, imported by web.py. Both the name check and the argument
+# parsing live in security/toolcalls.py: they read model output on its way into
+# the policy engine, so they belong beside the rest of that boundary.
 
 def discover_plugins(plugin_dir: Path = None) -> dict:
     """Loads plugins from the plugins/ directory.
@@ -631,7 +629,11 @@ def _rebuild_plugin_tool_map():
 from security import (
     wrap_untrusted, wrap_tool_output, make_tool_result,
     make_message, make_system_note, make_user_note,
+    valid_tool_name, parse_tool_arguments,
 )
+
+# Kept under the old name: worker.py and web.py import it from this module.
+_valid_tool_name = valid_tool_name
 
 
 def execute_tool(name: str, args: dict) -> str:
@@ -1072,14 +1074,7 @@ def agent_loop(messages: list, session_id: str, policy: PolicyEngine,
                     source="invalid_name",
                 ))
                 continue
-            raw_args = fn.get("arguments", {})
-            if isinstance(raw_args, dict):
-                args = raw_args
-            else:
-                try:
-                    args = json.loads(raw_args)
-                except (json.JSONDecodeError, TypeError):
-                    args = {}
+            args = parse_tool_arguments(fn.get("arguments", {}))
 
             decision, reason = policy.check(name, args)
 

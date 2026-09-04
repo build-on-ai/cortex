@@ -29,6 +29,7 @@ from security.auth import (
     note_auth_fail,
     AuthError,
 )
+from security.toolcalls import valid_tool_name, parse_tool_arguments
 from security.paths import normalize_path, path_under
 # _FallbackSentinel is deliberately not re-exported: an importable sentinel
 # makes forging one a one-liner. RecoveryEngine uses the private predicate in
@@ -52,6 +53,8 @@ __all__ = [
     # auth
     "ClientIdentity", "require_auth", "build_require_auth", "public_endpoint",
     "SessionManager", "get_session_manager", "rate_limit_key", "note_auth_fail", "AuthError",
+    # tool calls (model output on its way into the policy engine)
+    "valid_tool_name", "parse_tool_arguments",
     # paths
     "normalize_path", "path_under",
     # fallback — _FallbackSentinel deliberately NOT exported

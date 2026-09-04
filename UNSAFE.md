@@ -7,7 +7,7 @@ Grace ends 2026-06-01.
 
 ## Active allow-comments with lifecycle (1)
 
-- worker.py:78 rule=raw-message until=2026-12-01 because=CS agent registration payload, not LLM conversation role
+- worker.py:79 rule=raw-message until=2026-12-01 because=CS agent registration payload, not LLM conversation role
 
 ## Grandfathered legacy comments (0)
 

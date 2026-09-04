@@ -464,16 +464,22 @@ def test_auth_fail_rate_limit():
     os.environ["WEB_TOKEN"] = "test-for-rate-limit"
     web = importlib.import_module("web")
     # Clear any prior state.
-    with web._auth_fail_lock:
-        web._auth_fail_log.clear()
+    # The counter lives in security/auth.py; web.py calls that one, not its own.
+    from security import auth as _auth_mod
+    with _auth_mod._auth_fail_lock:
+        _auth_mod._auth_fail_log.clear()
     # First N-1 failures should stay under; the Nth trips the limit.
     ip = "198.51.100.7"  # TEST-NET-2
     over = False
-    for _ in range(web._AUTH_FAIL_LIMIT - 1):
-        over = web._note_auth_fail(ip) or over
+    for _ in range(_auth_mod._AUTH_FAIL_LIMIT - 1):
+        over = _auth_mod.note_auth_fail(ip) or over
     assert not over, "rate limit tripped too early"
-    final = web._note_auth_fail(ip)
+    final = _auth_mod.note_auth_fail(ip)
     assert final, "rate limit did not trip at the boundary"
+    # web.py must call the same counter object. A second one would give the
+    # same address its own budget on every auth path.
+    assert web._note_auth_fail is _auth_mod.note_auth_fail, \
+        "web.py uses its own auth-failure counter instead of the shared one"
 
 
 # E1 verification: bash writing plugins/ IS blocked (F5 pickup)
@@ -639,6 +645,7 @@ def test_require_auth_rate_limits():
 
 # IPv6 /64 bucketing
 def test_rate_limit_ipv6_prefix_key():
+    from security import rate_limit_key as _rate_limit_key
     import sys as _sys, importlib
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
@@ -653,11 +660,11 @@ def test_rate_limit_ipv6_prefix_key():
 
     # Two addresses in the same /64 must bucket together — else an IPv6
     # client can spray from 2^64 distinct IPs and bypass the limit.
-    k1 = web._rate_limit_key("2001:db8:1234:5678::1")
-    k2 = web._rate_limit_key("2001:db8:1234:5678:ffff:ffff:ffff:ffff")
+    k1 = _rate_limit_key("2001:db8:1234:5678::1")
+    k2 = _rate_limit_key("2001:db8:1234:5678:ffff:ffff:ffff:ffff")
     assert k1 == k2, f"IPv6 /64 collapse failed: {k1!r} vs {k2!r}"
     # Different /64 must produce a different key.
-    k3 = web._rate_limit_key("2001:db8:1234:9999::1")
+    k3 = _rate_limit_key("2001:db8:1234:9999::1")
     assert k3 != k1
 
 
@@ -821,6 +828,8 @@ def test_rule_13_has_absolute_rule_line():
 
 # client IP prefers X-Real-IP, not leftmost XFF
 def test_client_ip_uses_xrealip_not_leftmost_xff():
+    from security import ClientIdentity
+    _client_ip = lambda r: ClientIdentity.from_request(r, trust_proxy=True).ip
     import sys as _sys, importlib
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
@@ -846,7 +855,7 @@ def test_client_ip_uses_xrealip_not_leftmost_xff():
             "x-real-ip": "203.0.113.9",
         }
 
-    ip = web._client_ip(_FakeReq())
+    ip = _client_ip(_FakeReq())
     assert ip == "203.0.113.9", f"expected X-Real-IP, got {ip!r}"
     # And NOT the spoofed leftmost value.
     assert ip != "127.0.0.1"
@@ -856,6 +865,8 @@ def test_client_ip_uses_xrealip_not_leftmost_xff():
 
 # True-Client-IP honoured (CF Enterprise)
 def test_client_ip_honours_true_client_ip():
+    from security import ClientIdentity
+    _client_ip = lambda r: ClientIdentity.from_request(r, trust_proxy=True).ip
     import sys as _sys, importlib
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
@@ -878,12 +889,13 @@ def test_client_ip_honours_true_client_ip():
             # CF-Connecting-IP may be absent on Enterprise plans.
             "true-client-ip": "198.51.100.55",
         }
-    assert web._client_ip(_FakeReq()) == "198.51.100.55"
+    assert _client_ip(_FakeReq()) == "198.51.100.55"
     os.environ.pop("CORTEX_TRUST_PROXY_HEADERS", None)
 
 
 # IPv6 zone id stripped before bucketing
 def test_rate_limit_key_strips_ipv6_zone():
+    from security import rate_limit_key as _rate_limit_key
     import sys as _sys, importlib
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
@@ -895,9 +907,9 @@ def test_rate_limit_key_strips_ipv6_zone():
         del _sys.modules["web"]
     os.environ["WEB_TOKEN"] = "r12-token-b"
     web = importlib.import_module("web")
-    k_base = web._rate_limit_key("fe80::1")
+    k_base = _rate_limit_key("fe80::1")
     for zone in ("eth0", "wlan0", "br-docker0"):
-        k = web._rate_limit_key(f"fe80::1%{zone}")
+        k = _rate_limit_key(f"fe80::1%{zone}")
         assert k == k_base, (
             f"rotating zone id produced different bucket: {k!r} vs {k_base!r}"
         )

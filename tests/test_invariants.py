@@ -493,6 +493,41 @@ def test_auth_dependency_actually_rejects_unauthenticated():
 
 # INVARIANT 3: no direct request.client.host access outside security/
 
+def _client_bound_names(tree: ast.AST) -> set[str]:
+    """Names bound to a request's .client, however the binding is written.
+
+    The chain check alone missed the form the code actually used:
+
+        client = getattr(request_or_ws, "client", None)
+        if client and client.host:
+
+    There is no `.client.host` chain there, so the rule read clean while two
+    modules kept their own IP handling. Both spellings of the binding count.
+    """
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        from_client = False
+        # x = getattr(<anything>, "client", ...)
+        if (isinstance(value, ast.Call)
+                and _attr_chain(value.func) == "getattr"
+                and len(value.args) >= 2
+                and isinstance(value.args[1], ast.Constant)
+                and value.args[1].value == "client"):
+            from_client = True
+        # x = <anything>.client
+        elif isinstance(value, ast.Attribute) and value.attr == "client":
+            from_client = True
+        if not from_client:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                bound.add(target.id)
+    return bound
+
+
 def test_no_direct_client_host_access():
     """Invariant #3: client IPs come from ClientIdentity.from_request,
     not from reading request.client.host inline. Prevents the drift
@@ -503,10 +538,13 @@ def test_no_direct_client_host_access():
             tree = ast.parse(src)
         except SyntaxError:
             continue
+        via_variable = _client_bound_names(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and node.attr == "host":
                 inner = _attr_chain(node.value)
-                if inner and inner.endswith(".client"):
+                direct = bool(inner) and inner.endswith(".client")
+                indirect = isinstance(node.value, ast.Name) and node.value.id in via_variable
+                if direct or indirect:
                     line = _line_of(src, node)
                     # tokenised allow-check.
                     if _allow_comment(None, "direct-client-ip",
