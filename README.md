@@ -52,22 +52,30 @@ Cortex talks to [consciousness-server](https://github.com/build-on-ai/consciousn
 
 **Easiest path (CS on the same machine):**
 
-```bash
-# In one terminal — bring up the CS stack
-git clone https://github.com/build-on-ai/consciousness-server.git
-cd consciousness-server/deploy
-docker compose up -d
+Clone both repositories next to each other, then prepare CS before starting
+either process. The CS checkout owns its ports and the signing keys.
 
-# In another terminal — start Cortex
-cd /path/to/cortex
+```bash
+git clone --recurse-submodules https://github.com/build-on-ai/consciousness-server.git
+git clone https://github.com/build-on-ai/cortex.git
+
+cd consciousness-server
+bin/sync-ports
+bin/bootstrap-keys --client cortex-local
+(cd key-server && npm install)
+(cd deploy && docker compose up -d --build)
+
+# Start Cortex with the identity minted above.
+cd ../cortex
+CS_HOME=../consciousness-server \
+AGENT_NAME=cortex-local \
+CS_SIGNING_KEY=../consciousness-server/deploy/keys/cortex-local \
 ./run.sh agent
-# You'll see: + Discovered Consciousness Server at http://localhost:13032
 ```
 
-Cortex auto-discovers a local CS by reading **CS's own port registry**, so it
-follows whatever port that deployment uses, whatever offset the operator gave
-the palette. It looks for `ports.yaml` at `$CS_PORTS_FILE`, then `$CS_HOME`,
-then a CS checkout sitting next to this one.
+`CS_HOME` points Cortex at CS's own port registry, so it follows whichever
+port palette that deployment uses. When `CS_HOME` is unset, Cortex also looks
+at `$CS_PORTS_FILE` and a CS checkout sitting next to this one.
 
 No registry in reach means Cortex does not know where CS is — it says so at
 startup instead of probing ports at random. Point it at the checkout, or name
@@ -75,31 +83,44 @@ the server directly:
 
 ```bash
 CS_HOME=/path/to/consciousness-server ./run.sh agent   # read the registry
-CS_URL=http://192.0.2.5:13032 ./run.sh agent           # skip discovery
+CS_URL=http://192.0.2.5:13032 AGENT_NAME=cortex-remote \
+  CS_SIGNING_KEY=/path/to/cortex-remote ./run.sh agent
 ```
+
+When `CS_URL` is set, `CS_SIGNING_KEY` is required. Its public half must be
+registered in the CS key-server as `keys/agents/<AGENT_NAME>.pub`.
 
 Disable discovery entirely with `CORTEX_AUTO_DISCOVER_CS=0`.
 
 **Different host or port:**
 
 ```bash
-CS_URL=http://192.0.2.5:13032 AGENT_NAME=cortex-laptop ./run.sh agent
+CS_URL=http://192.0.2.5:13032 AGENT_NAME=cortex-laptop \
+  CS_SIGNING_KEY=/path/to/cortex-laptop ./run.sh agent
 ```
 
 `AGENT_NAME` is the identifier other agents see — give each Cortex instance a unique one if you run several.
 
 **Multi-agent demo (3 Cortex instances coordinating via CS):**
 
+Give each instance its own registered identity before starting it:
+
 ```bash
+CS_HOME=/path/to/consciousness-server
+CORTEX_HOME=/path/to/cortex
+for name in worker-A worker-B operator; do
+  "$CS_HOME/bin/bootstrap-keys" --client "$name"
+done
+
 tmux new-session -d -s cortex-demo
 tmux send-keys -t cortex-demo \
-  "AGENT_NAME=worker-A ./run.sh worker" Enter
+  "CS_HOME=$CS_HOME AGENT_NAME=worker-A CS_SIGNING_KEY=$CS_HOME/deploy/keys/worker-A $CORTEX_HOME/run.sh worker" Enter
 tmux split-window -t cortex-demo -h
 tmux send-keys -t cortex-demo \
-  "AGENT_NAME=worker-B ./run.sh worker" Enter
+  "CS_HOME=$CS_HOME AGENT_NAME=worker-B CS_SIGNING_KEY=$CS_HOME/deploy/keys/worker-B $CORTEX_HOME/run.sh worker" Enter
 tmux split-window -t cortex-demo -v
 tmux send-keys -t cortex-demo \
-  "AGENT_NAME=operator ./run.sh agent" Enter
+  "CS_HOME=$CS_HOME AGENT_NAME=operator CS_SIGNING_KEY=$CS_HOME/deploy/keys/operator $CORTEX_HOME/run.sh agent" Enter
 tmux attach -t cortex-demo
 ```
 
