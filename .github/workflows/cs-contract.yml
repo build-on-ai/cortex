@@ -27,7 +27,7 @@ jobs:
         run: pip install requests
 
       - name: Clone consciousness-server
-        run: git clone --depth=1 https://github.com/build-on-ai/consciousness-server.git /tmp/cs
+        run: git clone --depth=1 --recurse-submodules https://github.com/build-on-ai/consciousness-server.git /tmp/cs
 
       - name: Mint signing keys
         working-directory: /tmp/cs
@@ -36,9 +36,13 @@ jobs:
           ssh-keygen -t ed25519 -C cortex-ci -f deploy/keys/cortex -N "" -q
           cp deploy/keys/cortex.pub key-server/keys/agents/cortex.pub
 
+      - name: Resolve ports
+        working-directory: /tmp/cs
+        run: bin/sync-ports
+
       - name: Start CS stack
         working-directory: /tmp/cs/deploy
-        run: docker compose up -d
+        run: docker compose up -d --build
 
       - name: Resolve CS port
         run: echo "CS_PORT=$(/tmp/cs/lib/ports.py consciousness-server)" >> "$GITHUB_ENV"
